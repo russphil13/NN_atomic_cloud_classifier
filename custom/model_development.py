@@ -427,6 +427,7 @@ class SearchCV():
                                metrics=[v for v in metrics.values()])
 
             metric_results = {k: [] for k in metrics.keys()}
+            epochs_results = []
 
             for i in range(n_cvsets):
                 train_count =  len(cv_sets[i][0])
@@ -447,16 +448,17 @@ class SearchCV():
 
                 hs = self.model.fit(**var_params, **fixed_params)
 
-                for k in metrics.keys():
-                   metric_results[k].append(hs.history[f'val_{k}'][-1])
-
+                epochs_results.append(self._find_epochs(hs))
+                self._update_metric_results(hs, metrics, metric_results)
+                
                 if seed is not None:
                     seed += 10
 
-            for k in metrics.keys():
-                self.mean[k].append(np.mean(metric_results[k]))
-                self.std[k].append(np.std(metric_results[k]))
+            self._update_stats(metric_results)
 
+            epochs_mean = np.around(np.mean(epochs_results))
+            epochs_std = np.around(np.std(epochs_results), decimals=1)
+            model_params['training_epochs'] = f'{epochs_mean} +/- {epochs_std}'
             self.param_combs.append(model_params)
 
         self._cv_results(metrics)
@@ -519,6 +521,19 @@ class SearchCV():
                             for stat, res in stats.items()
                             for k in metrics.keys()}
         self.cv_results_['params'] = self.param_combs
+
+    def _find_epochs(self, history):
+        """Determine the number of epochs before early stopping.
+
+        Args
+            history: History object. Returned after fitting model.
+
+        Returns: Int.
+        """
+        
+        epoch_count = len(history.history['val_loss'])
+
+        return epoch_count
 
     def _get_dataset(self, dir_data, row_indices):
         """Get images and labels for a training/validation dataset.
@@ -701,6 +716,19 @@ class SearchCV():
                   .prefetch(3))
 
         return ds_val
+
+    def _update_metric_results(self, history, metrics, metric_results):
+        """"""
+
+        for k in metrics.keys():
+           metric_results[k].append(history.history[f'val_{k}'][-1])
+
+    def _update_stats(self, metric_results):
+        """"""
+
+        for k in metric_results.keys():
+            self.mean[k].append(np.mean(metric_results[k]))
+            self.std[k].append(np.std(metric_results[k]))
 
 def create_directory_structure(path_main):
     """Creates the directory structure for the model data.
