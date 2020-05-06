@@ -6,6 +6,7 @@ from os import path
 from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
 import tensorflow as tf
+from tensorflow.keras import Sequential
 from tensorflow.keras.callbacks import Callback
 from tensorflow.keras.layers import Dense, Dropout
 
@@ -348,21 +349,19 @@ class SearchCV():
                 metric function as values.
         """
 
-        means = (v for k, v in self.cv_results_.items()
-                 if 'mean' not in k)
-        stds = (v for k, v in self.cv_results_.items()
-                if 'std' not in k)
+        means = (self.cv_results_[f'mean_{k}'] for k in metrics.keys())
+        stds = (self.cv_results_[f'std_{k}'] for k in metrics.keys())
         metrics_results = ([m, s, self.cv_results_['params']]
                                 for m, s in zip(means, stds))
 
-        results_bymetric = {k:v for k, v in zip(metrics.keys(),
-                                                metrics_results)}
+        results_bymetric = {
+            k:v for k, v in zip(metrics.keys(), metrics_results)}
 
         for k, v in results_bymetric.items():
-            results_sort = sort_results(v)
+            sorted_results = sort_results(v)
             print(f'Results for {k} metric:')
             print()
-            for _, params, std, mean in results_sort:
+            for _, params, std, mean in sorted_results:
                 print(f'{mean:0.03f} +/- {std:0.03f} for {params!r}')
             print()
 
@@ -473,8 +472,8 @@ class SearchCV():
         
         Args
             input_dim: Int. Number of features at input.
-            dense_layers: Int. Number of dense layers.
-            nodes_per_layer: List of ints of length=dense_layers-1.
+            dense_layers: Int. Number of hidden dense layers.
+            nodes_per_layer: List of ints of length=dense_layers.
                 Number of nodes in each hidden layer.
             hidden_act: String. Activation function to use in each
                 hidden layer.
@@ -495,13 +494,15 @@ class SearchCV():
         else:
             do_layers = dropout_layers
 
-        for l in range(dense_layers - 1):
-            if do_layers[l] != 0:
-                self.model.add(Dropout(do_layers[l]))
+        self.model.add(Dense(nodes[0], input_dim=input_dim,
+                             activation=hidden_act))
 
-            self.model.add(
-                Dense(nodes[l], input_dim=input_dim,
-                      activation=hidden_act))
+        if dense_layers > 1:
+            for l in range(1, dense_layers - 1):
+                if do_layers[l - 1] != 0:
+                    self.model.add(Dropout(do_layers[l - 1]))
+
+                self.model.add(Dense(nodes[l], activation=hidden_act))
 
         self.model.add(Dense(1, activation=output_act))
 
@@ -701,6 +702,15 @@ class SearchCV():
 
         return ds_val
 
+def create_directory_structure(path_main):
+    """Creates the directory structure for the model data.
+    
+    Args
+        path_main: Path object. Destination for model files.
+    """
+
+    if not path_main.exists():
+        path_main.mkdir(parents=True)
 
 def get_path_image(path_data, label, filename):
     """Get a Path object for an image file.
@@ -769,18 +779,6 @@ def getstats_fromstream(path_model_id, path_data):
     min_ = np.amin(stats_byimage[:, 1])
 
     return num_pixels, max_, min_
-
-
-def create_directory_structure(path_main):
-    """Creates the directory structure for the model data.
-    
-    Args
-        path_main: Path object. Destination for model files.
-    """
-
-    if not path_main.exists():
-        path_main.mkdir(parents=True)
-
 
 def load_datasets(path_sets, path_images):
     """Load images and labels for all sets (training, test, etc.)
