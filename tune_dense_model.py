@@ -41,12 +41,13 @@ epochs = 100
 val_count = 40
 
 model_params = {'input_dim': num_pixels,
-                'dense_layers': 2,
+                'dense_layers': 1,
                 'nodes_per_layer': [[5, 10, 20]],
                 'hidden_act': ['relu']}
 #                'dropout_layers': [[0.15, 0.25]]}
 
 modelDNN = Sequential()
+cv = RepeatedKFolds(n_splits=5, n_repeats=3, seed=11)
 
 search = SearchCV(modelDNN,
                   model_params,
@@ -72,27 +73,5 @@ fit_params = {'path_data': path_images_left,
 search.fit(**fit_params)
 search.display_results(metrics)
 
-# Run this to check performance on the test set.
-#model_L_params = {'colsample_bytree': 0.35,
-#                  'gamma': 0.1,
-#                  'learning_rate': 0.001,
-#                  'max_depth': 9,
-#                  'min_child_weight': 5,
-#                  'n_estimators': 500,
-#                  'random_state': 10,
-#                  'reg_alpha': 0,
-#                  'reg_lambda': 100,
-#                  'subsample': 0.4,
-#                  'random_state': 10,
-#                  'verbosity': 0}
-#model_L = XGBClassifier(**model_L_params)
-#model_L.fit(X_train_scl_L, y_train_L, eval_set=eval_set,
-#            eval_metric='auc', early_stopping_rounds=20,
-#            verbose=False)
-#print("Detailed classification report:")
-#print()
-#y_true, y_pred = y_test_L, model_search.predict(X_test_scl_L)
-#print(classification_report(y_true, y_pred))
-#print()
 
 
