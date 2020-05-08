@@ -384,20 +384,11 @@ class SearchCV():
                 metric function as values.
         """
 
-        means = (self.cv_results_[f'mean_{k}'] for k in metrics.keys())
-        stds = (self.cv_results_[f'std_{k}'] for k in metrics.keys())
-        metrics_results = ([m, s, self.cv_results_['params']]
-                                for m, s in zip(means, stds))
-
-        results_bymetric = {
-            k:v for k, v in zip(metrics.keys(), metrics_results)}
-
-        for k, v in results_bymetric.items():
-            sorted_results = sort_results(v)
+        for k, v in self.cv_results_.items():
+#            sorted_results = sort_results(v)
             print(f'Results for {k} metric:')
             print()
-            for _, params, std, mean in sorted_results:
-                print(f'{mean:0.03f} +/- {std:0.03f} for {params!r}')
+            print(v.sort_values(by=['Metric mean'], ascending=False))
             print()
 
     def fit(self,
@@ -551,11 +542,14 @@ class SearchCV():
                 during training.
         """
 
-        stats = {'mean': self.mean, 'std': self.std}
-        self.cv_results_ = {f'{stat}_{k}': res[k]
-                            for stat, res in stats.items()
+        param_keys = self.param_combs[0].keys()
+        param_dict = {k: [comb[k] for comb in self.param_combs]
+                      for k in param_keys}
+        df_metric_result = {k: pd.DataFrame({'Metric mean': self.mean[k],
+                                             'Std. dev.': self.std[k],
+                                             **param_dict})
                             for k in metrics.keys()}
-        self.cv_results_['params'] = self.param_combs
+        self.cv_results_ = df_metric_result
 
     def _find_epochs(self, history):
         """Determine the number of epochs before early stopping.
@@ -812,7 +806,7 @@ def build_dense_network(model,
 
     return model
 
-def classification_report(model, ds_test_images, ds_test_labels, threshold=0.5):
+def report(model, ds_test_images, ds_test_labels, threshold=0.5):
     """"""
 
     true_iter = ds_test_labels.as_numpy_iterator()
