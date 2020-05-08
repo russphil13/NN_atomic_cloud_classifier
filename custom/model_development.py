@@ -3,12 +3,14 @@ from itertools import chain, product
 import numpy as np
 from numpy.random import default_rng
 from os import path
+import pandas as pd
 from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
 import tensorflow as tf
 from tensorflow.keras import Sequential
 from tensorflow.keras.callbacks import Callback
 from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.metrics import Accuracy, Precision, Recall
 
 class BatchHistory(Callback):
     """Callback giving metrics for each training batch.
@@ -29,10 +31,11 @@ class ImageDataset():
     """Pipeline for streaming image data."""
     
     def __init__(self,
-                 path_data=None,
-                 path_model_id=None,
+                 path_data,
+                 path_model_id,
+                 set_name,
                  batch_size=32,
-                 n_epochs=5,
+                 n_epochs=1,
                  rescale=None,
                  shuffle=True,
                  seed=None,
@@ -46,6 +49,9 @@ class ImageDataset():
                 class.
             path_model_id: Path object. Directory for files pertaining
                 to a particular model.
+            set_name: String. Name of dataset corresponding a file with
+                list of images. Options are 'training' for
+                'training_set.csv' and test for 'test_set.csv'.
             batch_size: Int. Batch size for stochastic gradient descent.
             rescale: Float. Multiplicative factor to apply to data.
             shuffle: Bool. Shuffle data? True/False.
@@ -54,6 +60,7 @@ class ImageDataset():
 
         self.path_data = path_data
         self.path_model_id = path_model_id
+        self.set_name = set_name
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.rescale = rescale        
@@ -61,25 +68,32 @@ class ImageDataset():
         self.seed = seed
         self.val_count = val_count
         
-        self.num_ex = 0
+        self.n_examples = 0
         self.class_le = LabelEncoder()
-        self.ds_train, self.ds_val = self._prepare_train_val_sets()
-        self.ds_train = self._train_pipeline()
-        self.ds_val = self._val_pipeline()
+
+        ds_1, ds_2 = self._prepare_sets()
+        if self.set_name is 'training':
+            self.ds_primary = self._train_pipeline(*ds_1)
+            if val_count != 0:
+                self.ds_secondary = self._val_pipeline(*ds_2)
+            else:
+                self.ds_secondary = None
+        elif self.set_name is 'test':
+            self.ds_primary, self.ds_secondary = self._test_pipeline(*ds_1)
     
     def get_datasets(self):
         """Get the training and validation datasets.
         
         Returns: Tuple of length=2 containing TF Datasets.
         """
-        return self.ds_train, self.ds_val
+        return self.ds_primary, self.ds_secondary
     
     def _load_images_labels(self):
         """Load images and labels from file.
         
         Returns: TF Dataset of image-label pairs.
         """
-        path_dataset_file = self.path_model_id.joinpath('training_set.csv')
+        path_dataset_file = self.path_model_id.joinpath(f'{self.set_name}_set.csv')
         
         with path_dataset_file.open(mode='r', newline='') as f:
             csv_reader = reader(f, delimiter=',')
@@ -89,7 +103,7 @@ class ImageDataset():
             rng = default_rng(self.seed)
             rng.shuffle(rows)
             
-        self.num_ex = len(rows)
+        self.n_examples = len(rows)
 
         ds_files = tf.data.Dataset.from_tensor_slices(
             [path.join(str(self.path_data), f'label_{row[1]}', row[0])
@@ -103,9 +117,7 @@ class ImageDataset():
         ds_labels = tf.data.Dataset.from_tensor_slices(
             class_labels_enc)
 
-        ds = tf.data.Dataset.zip((ds_images, ds_labels))
-
-        return ds
+        return ds_images, ds_labels
 
     def _load_preprocess_image(self, image_file):
         """Load image from file and perform preprocessing.
@@ -122,22 +134,24 @@ class ImageDataset():
 
         return image
 
-    def _prepare_train_val_sets(self):
+    def _prepare_sets(self):
         """Prepare training and validation datasets.
         
         Returns: Tuple of length=2 containing TF Datasets.
         """
 
-        ds_images_labels = self._load_images_labels()
+        ds_images, ds_labels = self._load_images_labels()
 
-        if self.shuffle:
-            ds_images_labels.shuffle(self.num_ex, seed=self.seed)
+        ds_images_2 = ds_images.take(self.val_count)
+        ds_labels_2 = ds_labels.take(self.val_count)
+        ds_images_1 = ds_images.skip(self.val_count)
+        ds_labels_1 = ds_labels.skip(self.val_count)
 
-        ds_val = ds_images_labels.take(self.val_count)
-        ds_train = ds_images_labels.skip(self.val_count)
+        ds_1 = (ds_images_1, ds_labels_1)
+        ds_2 = (ds_images_2, ds_labels_2)
 
-        return ds_train, ds_val
-
+        return ds_1, ds_2
+    
     def _preprocess_image(self, image_raw):
         """Convert raw binary to float64 and scale the pixel values.
         
@@ -148,36 +162,57 @@ class ImageDataset():
         """
 
         image = tf.io.decode_raw(image_raw, tf.float64)
+        
+        if self.rescale is not None:
+            image_out = image * self.rescale
+        else:
+            image_out = image
 
-        return image * self.rescale
+        return image_out
 
-    def _train_pipeline(self):
+    def _test_pipeline(self, ds_images, ds_labels):
         """Create a training dataset pipeline.
         
         Returns: TF Dataset.
         """
-        train_count = self.num_ex - self.val_count
-        steps_per_epoch = int(train_count//self.batch_size)
+        
+        ds_images_out = (ds_images.batch(self.batch_size)
+                                  .prefetch(3))
+        ds_labels_out = (ds_labels.batch(self.batch_size)
+                                  .prefetch(3))
+
+        return ds_images_out, ds_labels_out
+
+    def _train_pipeline(self, ds_images, ds_labels):
+        """Create a training dataset pipeline.
+        
+        Returns: TF Dataset.
+        """
+        train_count = self.n_examples - self.val_count
+        steps_per_epoch = int(train_count // self.batch_size)
         repeat_count = self.n_epochs * steps_per_epoch
 
-        self.ds_train = (self.ds_train.shuffle(train_count, seed=self.seed+10,
-                                               reshuffle_each_iteration=True)
-                         .repeat(count=repeat_count)
-                         .batch(self.batch_size)
-                         .prefetch(3))
+        ds_zip = tf.data.Dataset.zip((ds_images, ds_labels))
+        ds = (ds_zip.shuffle(train_count, seed=self.seed+10,
+                             reshuffle_each_iteration=True)
+                    .repeat(count=repeat_count)
+                    .batch(self.batch_size)
+                    .prefetch(3))
 
-        return self.ds_train
+        return ds
 
-    def _val_pipeline(self):
+    def _val_pipeline(self, ds_images, ds_labels):
         """Create a validation dataset pipeline.
         
         Returns: TF Dataset."""
         
-        self.ds_val = (self.ds_val.repeat(count=self.n_epochs)
-                       .batch(self.val_count)
-                       .prefetch(3))
+        ds_zip = tf.data.Dataset.zip((ds_images, ds_labels))
+        if self.val_count != 0:
+            ds = (ds_zip.repeat(count=self.n_epochs)
+                        .batch(self.val_count)
+                        .prefetch(3))
 
-        return self.ds_val
+        return ds
 
 class RepeatedKFolds():
     """Repeated K-Folds cross-validator.
@@ -730,6 +765,89 @@ class SearchCV():
             self.mean[k].append(np.mean(metric_results[k]))
             self.std[k].append(np.std(metric_results[k]))
 
+def build_dense_network(model,
+                        input_dim,
+                        dense_layers,
+                        nodes_per_layer=None,
+                        hidden_act='relu',
+                        output_act='sigmoid',
+                        dropout_layers=None):
+    """Builds a dense network.
+    
+    Args
+        input_dim: Int. Number of features at input.
+        dense_layers: Int. Number of hidden dense layers.
+        nodes_per_layer: List of ints of length=dense_layers.
+            Number of nodes in each hidden layer.
+        hidden_act: String. Activation function to use in each
+            hidden layer.
+        output_act: String. Activation function to use in the
+            output layer.
+        dropout_layers: List of float of length=dense_layers-1.
+            Fraction of inputs to drop before each hidden dense
+            layer.
+    """
+
+    if nodes_per_layer is None:
+        nodes = [10] * dense_layers
+    else:
+        nodes = nodes_per_layer
+
+    if dropout_layers is None:
+        do_layers = [0] * dense_layers
+    else:
+        do_layers = dropout_layers
+
+    model.add(Dense(nodes[0], input_dim=input_dim,
+                    activation=hidden_act))
+
+    if dense_layers > 1:
+        for l in range(1, dense_layers - 1):
+            if do_layers[l - 1] != 0:
+                model.add(Dropout(do_layers[l - 1]))
+
+            model.add(Dense(nodes[l], activation=hidden_act))
+
+    model.add(Dense(1, activation=output_act))
+
+    return model
+
+def classification_report(model, ds_test_images, ds_test_labels, threshold=0.5):
+    """"""
+
+    true_iter = ds_test_labels.as_numpy_iterator()
+    y_true = np.hstack(list(true_iter))
+    y_pred = model.predict(ds_test_images).flatten()
+
+    class_labels = np.unique(y_true)
+    depth = class_labels.shape[0]
+    
+    y_true_oh = tf.one_hot(y_true, depth=depth)
+    y_pred_oh = tf.one_hot(np.where(y_pred < threshold, 0, 1), depth=depth)
+    
+    results = {'Accuracy': [], 'Precision': [], 'Recall': []}
+
+    m = Accuracy()
+    _ = m.update_state(y_true, np.around(y_pred).astype(int))
+    results['Accuracy'].append(m.result().numpy())
+    results['Precision'].append(" ")
+    results['Recall'].append(" ")
+    
+    prec = [Precision(class_id=n) for n in class_labels]
+    rec = [Recall(class_id=n) for n in class_labels]
+
+    for p, r in zip(prec, rec):
+        p.update_state(y_true_oh, y_pred_oh)
+        r.update_state(y_true_oh, y_pred_oh)
+        results['Accuracy'].append(" ")
+        results['Precision'].append(p.result().numpy())
+        results['Recall'].append(r.result().numpy())
+
+    row_labels = ['All' if i == 0 else f'Class {i-1}'
+                  for i in range(depth + 1)]
+
+    return pd.DataFrame(data=results, index=row_labels)
+
 def create_directory_structure(path_main):
     """Creates the directory structure for the model data.
     
@@ -891,8 +1009,8 @@ def make_datasets(class_names, dataset_dict, path_source, path_dest, seed):
         path_dest.mkdir(parents=True)
 
     start=0
-    for set_name, num_ex in dataset_dict.items():
-        stop = start + num_ex
+    for set_name, n_examples in dataset_dict.items():
+        stop = start + n_examples
 
         filename = f'{set_name}_set.csv'
         path_file = path_dest.joinpath(filename)
@@ -905,7 +1023,7 @@ def make_datasets(class_names, dataset_dict, path_source, path_dest, seed):
             csv_writer = writer(f)
             csv_writer.writerows(rows)
 
-        start = num_ex
+        start = n_examples
 
 def sort_results(metric_results):
     """Sort metric performance results by the mean.
