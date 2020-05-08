@@ -11,9 +11,9 @@ from tensorflow.keras import Sequential
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.metrics import AUC
 
-set_types = ['training', 'test']
+dataset_names = ['training', 'test']
 num_ex = [260, 64]
-datasets_dict = dict(zip(set_types, num_ex))
+datasets_dict = dict(zip(dataset_names, num_ex))
 
 class_names = ['empty', 'cloud']
 seed = 52
@@ -42,9 +42,9 @@ val_count = 40
 
 model_params = {'input_dim': num_pixels,
                 'dense_layers': 2,
-                'nodes_per_layer': [[5, 10, 20], [5, 10, 20]],
+                'nodes_per_layer': [[5, 10], [5, 10]],
                 'hidden_act': ['relu'],
-                'dropout_layers': [[0, 0.15, 0.25]]}
+                'dropout_layers': [[0, 0.25]]}
 
 modelDNN = Sequential()
 cv = RepeatedKFolds(n_splits=5, n_repeats=3, seed=11)
